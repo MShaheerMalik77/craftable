@@ -1,6 +1,12 @@
 package com.example.craftable
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
+import android.util.Base64
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -14,12 +20,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
 import com.example.craftable.navigation.Screen
+import com.google.firebase.auth.ktx.auth
+import com.google.firebase.database.ktx.database
+import com.google.firebase.ktx.Firebase
+import java.io.ByteArrayOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,12 +38,16 @@ fun MakePostScreen(navController: NavController) {
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var imageUri by remember { mutableStateOf<Uri?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
-    val launcher = rememberLauncherForActivityResult(
+    val context = LocalContext.current
+    val database = Firebase.database
+    val user = Firebase.auth.currentUser
+    val userId = user?.uid
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        imageUri = uri
-    }
+    ) { uri -> imageUri = uri }
 
     Scaffold(
         topBar = {
@@ -52,7 +67,6 @@ fun MakePostScreen(navController: NavController) {
         },
         containerColor = Color(0xFFF1F8E9)
     ) { padding ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -61,8 +75,6 @@ fun MakePostScreen(navController: NavController) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Top
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
@@ -97,7 +109,7 @@ fun MakePostScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(20.dp))
 
             Button(
-                onClick = { launcher.launch("image/*") },
+                onClick = { imagePickerLauncher.launch("image/*") },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF66BB6A)),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -130,17 +142,76 @@ fun MakePostScreen(navController: NavController) {
 
             Button(
                 onClick = {
-                    // TODO: handle upload logic
-                    navController.navigate(Screen.Dashboard.route)
+                    if (imageUri != null && title.isNotBlank() && description.isNotBlank() && userId != null) {
+                        isLoading = true
+                        val base64Image = encodeImageToBase64(context, imageUri!!)
+                        if (base64Image == null) {
+                            Toast.makeText(context, "Failed to encode image", Toast.LENGTH_SHORT).show()
+                            isLoading = false
+                            return@Button
+                        }
+
+                        val postsRef = database.reference.child("posts").push()
+                        val postId = postsRef.key ?: return@Button
+
+                        val postData = mapOf(
+                            "title" to title,
+                            "description" to description,
+                            "imageBase64" to base64Image,
+                            "timestamp" to System.currentTimeMillis(),
+                            "userId" to userId
+                        )
+
+                        postsRef.setValue(postData)
+                            .addOnSuccessListener {
+                                // Add reference in user's personal posts
+                                database.reference.child("users").child(userId).child("posts").child(postId).setValue(true)
+
+                                Toast.makeText(context, "Post uploaded!", Toast.LENGTH_SHORT).show()
+                                isLoading = false
+                                navController.navigate(Screen.Dashboard.route)
+                            }
+                            .addOnFailureListener {
+                                Toast.makeText(context, "Failed to save post", Toast.LENGTH_SHORT).show()
+                                isLoading = false
+                            }
+                    } else {
+                        Toast.makeText(context, "Fill all fields and select an image", Toast.LENGTH_SHORT).show()
+                    }
                 },
+                enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(55.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Post", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (isLoading) "Posting..." else "Post",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
+    }
+}
+
+// Compress and convert image to Base64
+fun encodeImageToBase64(context: Context, uri: Uri): String? {
+    return try {
+        val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ImageDecoder.createSource(context.contentResolver, uri)
+        } else {
+            return null
+        }
+
+        val bitmap = ImageDecoder.decodeBitmap(source)
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 50, outputStream)
+        val byteArray = outputStream.toByteArray()
+        Base64.encodeToString(byteArray, Base64.DEFAULT)
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
 }

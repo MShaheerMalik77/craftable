@@ -1,5 +1,6 @@
 package com.example.craftable
 
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -15,11 +16,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush as GradientBrush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.craftable.navigation.Screen
+import com.google.firebase.auth.FirebaseAuth
 
 @Composable
 fun LoginScreen(navController: NavController) {
@@ -100,9 +103,20 @@ fun LoginScreen(navController: NavController) {
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
+                val context = LocalContext.current
+                val auth = FirebaseAuth.getInstance()
 
                 Button(
-                    onClick = { navController.navigate(Screen.Dashboard.route) },
+                    onClick = {
+                        auth.signInWithEmailAndPassword(email, password)
+                            .addOnCompleteListener { task ->
+                                if (task.isSuccessful) {
+                                    navController.navigate(Screen.Dashboard.route)
+                                } else {
+                                    Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
