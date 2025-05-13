@@ -108,15 +108,20 @@ fun LoginScreen(navController: NavController) {
 
                 Button(
                     onClick = {
-                        auth.signInWithEmailAndPassword(email, password)
-                            .addOnCompleteListener { task ->
-                                if (task.isSuccessful) {
-                                    navController.navigate(Screen.Dashboard.route)
-                                } else {
-                                    Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                        if (email.isNotBlank() && password.isNotBlank()) {
+                            auth.signInWithEmailAndPassword(email, password)
+                                .addOnCompleteListener { task ->
+                                    if (task.isSuccessful) {
+                                        navController.navigate(Screen.Dashboard.route)
+                                    } else {
+                                        Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                                    }
                                 }
-                            }
+                        } else {
+                            Toast.makeText(context, "Please enter both email and password", Toast.LENGTH_SHORT).show()
+                        }
                     },
+
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),

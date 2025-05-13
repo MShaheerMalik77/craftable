@@ -58,7 +58,10 @@ fun RegisterScreen(navController: NavController) {
                 // Logo at the top
                 AnimatedVisibility(
                     visible = showContent,
-                    enter = slideInVertically(initialOffsetY = { -100 }, animationSpec = tween(700)) + fadeIn()
+                    enter = slideInVertically(
+                        initialOffsetY = { -100 },
+                        animationSpec = tween(700)
+                    ) + fadeIn()
                 ) {
                     Box(
                         modifier = Modifier
@@ -106,15 +109,62 @@ fun RegisterScreen(navController: NavController) {
                 Spacer(modifier = Modifier.height(24.dp))
                 val context = LocalContext.current
                 val auth = FirebaseAuth.getInstance()
+                val database = com.google.firebase.database.FirebaseDatabase.getInstance().reference
 
                 Button(
                     onClick = {
                         auth.createUserWithEmailAndPassword(email, password)
                             .addOnCompleteListener { task ->
                                 if (task.isSuccessful) {
-                                    navController.navigate(Screen.Dashboard.route)
+                                    val uid = auth.currentUser?.uid ?: return@addOnCompleteListener
+
+                                    val guestCounterRef =
+                                        database.child("usernames").child("lastGuestNumber")
+                                    guestCounterRef.runTransaction(object :
+                                        com.google.firebase.database.Transaction.Handler {
+                                        override fun doTransaction(currentData: com.google.firebase.database.MutableData): com.google.firebase.database.Transaction.Result {
+                                            var currentNumber =
+                                                currentData.getValue(Int::class.java) ?: 0
+                                            currentNumber += 1
+                                            currentData.value = currentNumber
+                                            return com.google.firebase.database.Transaction.success(
+                                                currentData
+                                            )
+                                        }
+
+                                        override fun onComplete(
+                                            error: com.google.firebase.database.DatabaseError?,
+                                            committed: Boolean,
+                                            snapshot: com.google.firebase.database.DataSnapshot?
+                                        ) {
+                                            if (error != null) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Username assignment failed.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                return
+                                            }
+
+                                            val newUsername =
+                                                "guest${snapshot?.getValue(Int::class.java) ?: 1}"
+                                            val userRef = database.child("users").child(uid)
+                                            val userMap = mapOf(
+                                                "uid" to uid,
+                                                "email" to email,
+                                                "username" to newUsername
+                                            )
+                                            userRef.setValue(userMap).addOnCompleteListener {
+                                                navController.navigate(Screen.Dashboard.route)
+                                            }
+                                        }
+                                    })
                                 } else {
-                                    Toast.makeText(context, "Registration failed: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(
+                                        context,
+                                        "Registration failed: ${task.exception?.message}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
                                 }
                             }
                     },
@@ -130,4 +180,3 @@ fun RegisterScreen(navController: NavController) {
         }
     }
 }
-

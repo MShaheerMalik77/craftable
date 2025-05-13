@@ -1,6 +1,9 @@
 package com.example.craftable
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -30,17 +33,108 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-
-
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import android.util.Base64
+import java.io.ByteArrayOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(navController: NavController) {
     val userId = FirebaseAuth.getInstance().currentUser?.uid
+    val userEmail = FirebaseAuth.getInstance().currentUser?.email
     var selectedTab by remember { mutableStateOf(0) }
     var pfpUri by remember { mutableStateOf<Uri?>(null) }
+    var username by remember { mutableStateOf("Loading...") }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var profilePicBase64 by remember { mutableStateOf<String?>(null) }
+
+    val context = LocalContext.current
+
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        pfpUri = uri
+        uri?.let {
+            pfpUri = uri
+
+            // Convert selected image to Base64 and upload to Firebase
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            val outputStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            val base64Image = Base64.encodeToString(outputStream.toByteArray(), Base64.DEFAULT)
+
+            userId?.let { uid ->
+                FirebaseDatabase.getInstance()
+                    .getReference("users")
+                    .child(uid)
+                    .child("profilePic")
+                    .setValue(base64Image)
+                    .addOnCompleteListener {
+                        if (it.isSuccessful) {
+                            Toast.makeText(context, "Profile picture updated", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Failed to update profile picture", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+            }
+        }
+    }
+
+    // Fetch username from database
+    LaunchedEffect(userId) {
+        userId?.let {
+            val ref = FirebaseDatabase.getInstance().getReference("users").child(it).child("username")
+            ref.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    username = snapshot.getValue(String::class.java) ?: "Unknown"
+                }
+
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
+
+        // Fetch profile picture from database
+        userId?.let {
+            val ref = FirebaseDatabase.getInstance().getReference("users").child(it).child("profilePic")
+            ref.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    profilePicBase64 = snapshot.getValue(String::class.java)
+                }
+
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
+    }
+
+    if (showEditDialog) {
+        var newUsername by remember { mutableStateOf(username) }
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("Edit Username") },
+            text = {
+                OutlinedTextField(
+                    value = newUsername,
+                    onValueChange = { newUsername = it },
+                    label = { Text("New Username") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    userId?.let {
+                        FirebaseDatabase.getInstance().getReference("users")
+                            .child(it).child("username").setValue(newUsername)
+                    }
+                    username = newUsername
+                    showEditDialog = false
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -67,12 +161,16 @@ fun ProfileScreen(navController: NavController) {
                     .clickable { launcher.launch("image/*") },
                 contentAlignment = Alignment.Center
             ) {
-                if (pfpUri != null) {
-                    Image(
-                        painter = rememberAsyncImagePainter(pfpUri),
-                        contentDescription = "Profile Picture",
-                        modifier = Modifier.fillMaxSize().clip(CircleShape)
-                    )
+                if (profilePicBase64 != null) {
+                    val imageBytes = Base64.decode(profilePicBase64, Base64.DEFAULT)
+                    val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                    bitmap?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = "Profile Picture",
+                            modifier = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                    }
                 } else {
                     Icon(Icons.Filled.AccountCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(100.dp))
                 }
@@ -90,8 +188,12 @@ fun ProfileScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("User Name", style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp))
-            Text("user@example.com", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                username,
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp),
+                modifier = Modifier.clickable { showEditDialog = true }
+            )
+            Text(userEmail ?: "No email", style = MaterialTheme.typography.bodyMedium)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -108,7 +210,7 @@ fun ProfileScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(16.dp))
 
             when (selectedTab) {
-                0 -> BoardsTab(userId)
+                0 -> BoardsTab(userId, navController)
                 1 -> CommentsTab(userId)
                 2 -> PinsTab(userId)
                 3 -> PostsTab(userId)
@@ -129,28 +231,53 @@ fun ProfileScreen(navController: NavController) {
 }
 
 @Composable
-fun BoardsTab(userId: String?) {
+fun BoardsTab(userId: String?, navController: NavController) {
+    // Define a data class for a board
+    data class Board(val name: String, val description: String?)
 
-    var boards by remember { mutableStateOf(listOf<String>()) }
+    var boards by remember { mutableStateOf(listOf<Board>()) }
 
     LaunchedEffect(userId) {
-        val ref = FirebaseDatabase.getInstance().getReference("boards/$userId")
-        ref.addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                boards = snapshot.children.mapNotNull { it.key }
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        })
+        if (userId != null) {
+            val ref = FirebaseDatabase.getInstance().getReference("users/$userId/boards")
+            ref.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val boardList = snapshot.children.map { boardSnapshot ->
+                        val name = boardSnapshot.key ?: return@map null
+                        val description = boardSnapshot.child("description").getValue(String::class.java)
+                        Board(name, description)
+                    }.filterNotNull()
+                    boards = boardList
+                }
+
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
     }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(boards) { board ->
-            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(Color.White)) {
-                Text(board, modifier = Modifier.padding(16.dp), fontWeight = FontWeight.SemiBold)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        navController.navigate("boardDetail/${board.name}")
+                    },
+                colors = CardDefaults.cardColors(Color.White)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(board.name, fontWeight = FontWeight.SemiBold)
+                    board.description?.let {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                }
             }
         }
     }
 }
+
+
 
 @Composable
 fun CommentsTab(userId: String?) {
@@ -260,3 +387,4 @@ fun PostsTab(userId: String?) {
         }
     }
 }
+
